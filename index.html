@@ -271,6 +271,14 @@ input.promo:focus{border-color:#b47bff;box-shadow:0 0 12px rgba(180,123,255,.35)
 @keyframes spin{to{transform:rotate(360deg)}}
 #adOverlay p{color:#c0a8e8;font-size:14px;letter-spacing:1px}
 
+/* ========== ЗАГРУЗКА УРОВНЯ ========== */
+#levelLoading{position:absolute;inset:0;z-index:90;display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  background:rgba(5,2,10,.62);pointer-events:none;backdrop-filter:blur(2px)}
+#levelLoading.active{display:flex}
+#levelLoading .spinner{width:54px;height:54px;border-width:4px}
+#levelLoading p{color:#c9a8ff;font-size:14px;letter-spacing:1px;text-align:center;padding:0 22px;line-height:1.45;
+  text-shadow:0 0 10px rgba(167,101,240,.6)}
+
 /* ========== ТОСТ ========== */
 #toast{position:absolute;left:50%;top:12%;transform:translateX(-50%);z-index:300;display:flex;flex-direction:column;gap:7px;align-items:center;pointer-events:none}
 .toast-item{background:rgba(20,10,34,.96);border:2px solid #7b3fbf;border-radius:12px;padding:9px 16px;font-size:13px;color:#e0ccff;box-shadow:0 0 22px rgba(138,75,214,.5);animation:toastIn .3s ease-out;white-space:nowrap}
@@ -587,6 +595,10 @@ input.promo:focus{border-color:#b47bff;box-shadow:0 0 12px rgba(180,123,255,.35)
 
   <div id="modal-root"></div>
   <div id="adOverlay"><div class="spinner"></div><p id="adText">Загрузка рекламы...</p></div>
+  <div id="levelLoading">
+    <div class="spinner"></div>
+    <p id="levelLoadingText">Загрузка уровня...</p>
+  </div>
   <div id="toast"></div>
 </div>
 
@@ -807,7 +819,8 @@ const I18N = {
   ru:{
     loadVK:'Подключение к VK...', loadSave:'Загрузка сохранения...',
     loadHouse:'Подготовка дома...', loadReady:'Готово!',
-    loading:'Загрузка данных...', tutQ:'Хотите пройти обучение?',
+    loading:'Загрузка данных...', levelLoading:'Ожидайте загрузки уровня...',
+    tutQ:'Хотите пройти обучение?',
     tutD:'Короткий интерактивный уровень научит вас защищать дом от духов и строить башни.',
     tutYes:'Пройти обучение', tutNo:'Пропустить',
     levels:'Уровни', settings:'Настройки', tasks:'Задания', afk:'Комната отдыха',
@@ -883,7 +896,8 @@ const I18N = {
   en:{
     loadVK:'Connecting to VK...', loadSave:'Loading save...',
     loadHouse:'Preparing house...', loadReady:'Ready!',
-    loading:'Loading data...', tutQ:'Would you like a tutorial?',
+    loading:'Loading data...', levelLoading:'Loading level, please wait...',
+    tutQ:'Would you like a tutorial?',
     tutD:'A short interactive level will teach you to defend the house from ghosts and build towers.',
     tutYes:'Start tutorial', tutNo:'Skip',
     levels:'Levels', settings:'Settings', tasks:'Tasks', afk:'Rest Room',
@@ -1071,7 +1085,7 @@ const DEFAULT_STATE = {
   lastDaily:0, lastTasks:0, tasks:[],
   lastAFK:0, afkPending:0,
   playtimeClaimed:[], totalPlaytime:0,
-  tutorialDone:false, tutorialSeen:false,
+  tutorialDone:false, tutorialSeen:false, levelAdShown:false,
   towerFloor:1, towerBest:1,
   kills:0, levelsWon:0, towersBuilt:0, abilitiesUsed:0,
   starterGiven:false
@@ -1127,6 +1141,19 @@ function initVK(){
 }
 function showAdOverlay(text){ $('#adText').textContent = text || t('adLoading'); $('#adOverlay').classList.add('active'); }
 function hideAdOverlay(){ $('#adOverlay').classList.remove('active'); }
+
+/* --- Уведомление о загрузке уровня / рекламы --- */
+function showLevelLoading(text){
+  const box = $('#levelLoading');
+  if(!box) return;
+  const txt = $('#levelLoadingText');
+  if(txt) txt.textContent = text || t('levelLoading');
+  box.classList.add('active');
+}
+function hideLevelLoading(){
+  const box = $('#levelLoading');
+  if(box) box.classList.remove('active');
+}
 
 /* Межстраничная реклама — без полноэкранного оверлея.
    Оверлей перехватывал первый клик и «съедал» ввод игрока на ПК. */
@@ -2239,20 +2266,42 @@ function startLevel(levelNum, isTower, dungeon){
   startLoop();
 
   // ⏸ Пауза на время загрузки/показа межстраничной рекламы.
-  // Оверлей не показываем — он перехватывает первый клик на ПК.
   game.paused = true;
   const toolsEl = $('#gameTools');
   if(toolsEl) toolsEl.style.pointerEvents = 'none';
   updatePauseButtonState();
 
-  showInterstitial(()=>{
+  // Возобновление игры после загрузки / рекламы
+  const resumeGame = ()=>{
+    hideLevelLoading();
     if(!game) return;
     game.paused = false;
     lastTs = 0;
-    const el2 = $('#gameTools');
-    if(el2) el2.style.pointerEvents = '';
+    if(toolsEl) toolsEl.style.pointerEvents = '';
     updatePauseButtonState();
-  });
+  };
+
+  // Условие «первого раза»:
+  //  • новичок, не прошедший ни одного уровня;
+  //  • либо самый первый вход на уровень за всё время.
+  // В этих случаях реклама перед уровнем НЕ показывается
+  // (касается и первого уровня, и Башни Бесконечности, и подземелий).
+  const isNewPlayer = (state.levelsWon || 0) === 0;
+  const firstEver   = !state.levelAdShown;
+  state.levelAdShown = true;
+  saveGame();
+
+  if(isNewPlayer || firstEver){
+    showLevelLoading(t('levelLoading'));
+    setTimeout(resumeGame, 650);
+  } else {
+    showLevelLoading(t('adLoading'));
+    const startedAt = now();
+    showInterstitial(()=>{
+      const wait = Math.max(0, 500 - (now() - startedAt));
+      setTimeout(resumeGame, wait);
+    });
+  }
 }
 
 function startLoop(){ if(rafId) cancelAnimationFrame(rafId); lastTs = 0; rafId = requestAnimationFrame(loop); }
@@ -3094,6 +3143,7 @@ function finishLevel(win){
   if(!game || game.finished) return;
   game.finished = true; game.paused = true;
   hideTowerPopup();
+  hideLevelLoading();
 
   if(game.tutorial){
     showTutorialComplete();
@@ -3209,6 +3259,7 @@ function finishLevel(win){
 }
 
 function cleanupGame(){
+  hideLevelLoading();
   hideTowerPopup();
   pendingAbility = null;
   activePointers.clear();
